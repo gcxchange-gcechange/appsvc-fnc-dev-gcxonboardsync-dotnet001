@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "appsvc_fnc_dev_gcxonboardsync_dotnet001": {
+      "commandName": "Project",
+      "commandLineArgs": "--port 7018",
+      "launchBrowser": false
+    }
+  }
+}
