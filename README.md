@@ -1,8 +1,8 @@
-# Name of the application
+# GCX Onboarding Synchronization
 
 ## Summary
 
-Short description of what the function app do. Give the basic information and feature of the app. 
+Syncs users between IDF and GCXchange 
 
 ## Prerequisites
 
