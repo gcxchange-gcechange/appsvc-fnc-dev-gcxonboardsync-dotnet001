@@ -3,14 +3,10 @@ using Azure.Identity;
 using Azure.Security.KeyVault.Secrets;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using Microsoft.Graph;
-using Microsoft.Identity.Client;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Net.Http;
-using System.Net.Http.Headers;
-using System.Net.Sockets;
 using System.Threading.Tasks;
 using System.Threading;
 
@@ -42,29 +38,22 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
                 _log = log;
                 _tokenEndpoint = "https://login.microsoftonline.com/" + _tenantId + "/oauth2/v2.0/token";
 
-                //SecretClientOptions options = new SecretClientOptions()
-                //{
-                //    Retry =
-                //{
-                //    Delay= TimeSpan.FromSeconds(2),
-                //    MaxDelay = TimeSpan.FromSeconds(16),
-                //    MaxRetries = 5,
-                //    Mode = RetryMode.Exponential
-                // }
-                //};
+                SecretClientOptions options = new SecretClientOptions()
+                {
+                    Retry =
+                {
+                    Delay= TimeSpan.FromSeconds(2),
+                    MaxDelay = TimeSpan.FromSeconds(16),
+                    MaxRetries = 5,
+                    Mode = RetryMode.Exponential
+                 }
+                };
 
-                //var client = new SecretClient(new Uri(keyVaultUrl), new DefaultAzureCredential(), options);
-                //KeyVaultSecret secret = client.GetSecret(secretName);
-                //_clientSecret = secret.Value;
-                //KeyVaultSecret password = client.GetSecret(secretNamePassword);
-                //_password = password.Value;
-
-
-
-                _clientSecret = "pbq8Q~-cmOKbPqT9HY-nrKSvr-LqgPQMgyoNzdgd";
-                _password = "WBA8Q~7Jhv192KwNvto3FYno29NOVx_L5bwckdvS";
-
-
+                var client = new SecretClient(new Uri(keyVaultUrl), new DefaultAzureCredential(), options);
+                KeyVaultSecret secret = client.GetSecret(secretName);
+                _clientSecret = secret.Value;
+                KeyVaultSecret password = client.GetSecret(secretNamePassword);
+                _password = password.Value;
             }
 
             public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken)
@@ -96,11 +85,6 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
             {
                 HttpClient httpClient = new HttpClient();
 
-                // TEMP
-                if (_username == "serviceAccount-AddWelcome@devgcx.ca")
-                {
-                    _password = "lx78Q~GPGiM7Mv4gmWcrS5ldawspu8mvllN.RcFT";
-                }
                 var Parameters = new List<KeyValuePair<string, string>>
                 {
                     new KeyValuePair<string, string>("client_id", _clientId),
