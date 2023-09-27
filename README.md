@@ -3,31 +3,73 @@
 ## Summary
 
 Syncs users between IDF and GCXchange 
+- get a list of synced deparments
+- loop through the list and perform the following actions for each department:
+  - get the security group id from a json file in the storage account
+  - use the group id to get the list of users to onboard since the last sync date
+  - get the welcome group id from a pool of welcome groups based on capacity
+  - assign the users to the assigned and welcome groups
 
 ## Prerequisites
 
-This function app connects to [this webpart](https://github.com/gcxchange-gcechange).
+The following user accounts (as reflected in the app settings) are required:
+
+| Account         | Membership requirements                               |
+| --------------- | ----------------------------------------------------- |
+| emailUserName   | n/a                                                   |
+| onboardUserName | Site with synced department list, assigned user group |
+| welcomeUserName | welcome user group(s)                                 |
+
+Note that user account design can be modified to suit your environment
 
 ## Version 
 
 ![dotnet 6](https://img.shields.io/badge/net6.0-blue.svg)
 
 ## API permission
-List of api permission for the app registration
 
 MSGraph
 
+| API / Permissions name    | Type      | Admin consent | Justification                       |
+| ------------------------- | --------- | ------------- | ----------------------------------- |
+| Directory.Read.All        | Delegated | Yes           | Read group members                  |
+| GroupMember.ReadWrite.All | Delegated | Yes           | Assign members to groups            |
+| Mail.Send                 | Delegated | Yes           | Send failure notifications by email | 
+| Sites.ReadWrite.All       | Delegated | Yes           | Read and update SharePoint list     |
+
 Sharepoint
 
+n/a
+
 ## App setting
-List of all the settings that need to be add or change to the app settings of the function app
+
+| Name                    | Description                                                                   |
+| ----------------------- | ----------------------------------------------------------------------------- |
+| assignedGroupId 		    | Object Id for the assigned users group                                        |
+| AzureWebJobsStorage     | Connection string for the storage acoou nt                                    |
+| AzureWebJobsStorageSync | Connection string for the storage account with sync data                      |
+| clientId                | The application (client) ID of the app registration                           |
+| containerName           | Than name of the container that hosts the sync files                          |
+| departmentSyncListId    | Id of the SharePoint list for synced departments                              |
+| emailUserName           | Email address used to send failure notifications                              |
+| emailUserSecret         | Secret name for emailUserSecret                                               |
+| fileNameSuffix          | The common suffix for filenames containing sync data                          |
+| keyVaultUrl             | Address for the key vault                                                     |
+| onboardUserName         | User principal name for the service account that performs onboarding tasks    |
+| onboardUserSecret       | Secret name for onboardUserName                                               |
+| recipientAddress        | Email address that received failure notifications                             |
+| secretName              | Secret name used to authorize the function app                                |
+| siteId                  | Id of the SharePoint site that hosts the list of synced departments           |
+| tenantId                | Id of the Azure tenant that hosts the function app                            |
+| welcomeGroupIds         | Comma separated list of Ids for the welcome group(s)                          |
+| welcomeUserName         | User principal name for the service account that performs welcome group tasks |
+| welcomeUserSecret       | Secret name for welcomeUserName                                               |
 
 ## Version history
 
 Version|Date|Comments
 -------|----|--------
-1.0|Dec 9, 2021|Initial release
-1.1|March 25, 2022|Next release
+1.0|TBD|Initial release
 
 ## Disclaimer
 
