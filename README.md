@@ -46,7 +46,7 @@ n/a
 | Name                    | Description                                                                   |
 | ----------------------- | ----------------------------------------------------------------------------- |
 | assignedGroupId 		    | Object Id for the assigned users group                                        |
-| AzureWebJobsStorage     | Connection string for the storage acoou nt                                    |
+| AzureWebJobsStorage     | Connection string for the storage acoount                                     |
 | AzureWebJobsStorageSync | Connection string for the storage account with sync data                      |
 | clientId                | The application (client) ID of the app registration                           |
 | containerName           | Than name of the container that hosts the sync files                          |
