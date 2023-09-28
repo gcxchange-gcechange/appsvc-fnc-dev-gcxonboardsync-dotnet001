@@ -12,7 +12,6 @@ using Newtonsoft.Json;
 using Microsoft.WindowsAzure.Storage;
 using Microsoft.Graph;
 using static appsvc_fnc_dev_gcxonboardsync_dotnet001.Auth;
-using Microsoft.AspNetCore.Mvc;
 using System.Linq;
 
 namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
@@ -51,15 +50,19 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
             var welcomeUserClient = new GraphServiceClient(new ROPCConfidentialTokenCredential(config["welcomeUserName"], config["welcomeUserSecret"], log));
 
             List<ListItem> departmentList = await GetSyncedDepartmentList(onboardUserClient, siteId, listId, log);
+            log.LogInformation($"departmentList.Count = {departmentList.Count}");
 
             if (departmentList != null) {
-                log.LogInformation($"departmentList.Count = {departmentList.Count}");
                 foreach (ListItem department in departmentList)
                 {
                     string Abbreviation = department.Fields.AdditionalData["Abbreviation"].ToString();
                     DateTime? LastSyncDate = department.Fields.AdditionalData.Keys.Contains("LastSyncDate") ? (DateTime)department.Fields.AdditionalData["LastSyncDate"] : null;
                     string itemId = department.Id;
                     var groupId = GetSecurityGroupId(Abbreviation, AzureWebJobsStorage, containerName, fileNameSuffix, log);
+
+                    log.LogInformation($"Abbreviation: {Abbreviation}");
+                    log.LogInformation($"LastSyncDate: {LastSyncDate}");
+                    log.LogInformation($"groupId: {groupId}");
 
                     if (groupId == "") {
                         sendEmail(config["emailUserName"], config["emailUserSecret"], config["recipientAddress"], "Can't find security group id", Abbreviation, log);
@@ -68,19 +71,28 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
 
                     if (LastSyncDate != null) {
                         var userIds = GetUsersToOnboard(onboardUserClient, groupId, (DateTime)LastSyncDate, log);
-                        string welcomeGroupId = GetWelcomeGroupId(welcomeUserClient, welcomeGroupIds, userIds.Result.Count, WelcomeGroupMemberLimit, log).Result;
-                        string response = await AssignUserstoGroups(welcomeUserClient, userIds.Result, assignedGroupId, welcomeGroupId, log);
 
-                        if (response == "") {
-                            await UpdateLastSyncDate(onboardUserClient, siteId, listId, itemId, log);
-                        }
-                        else {
-                            sendEmail(config["emailUserName"], config["emailUserSecret"], config["recipientAddress"], "Assign users failed", response, log);
+                        log.LogInformation($"userIds.Result.Count: {userIds.Result.Count}");
+
+                        if (userIds.Result.Count > 0) {
+                            string welcomeGroupId = GetWelcomeGroupId(welcomeUserClient, welcomeGroupIds, userIds.Result.Count, WelcomeGroupMemberLimit, log).Result;
+                            string response = await AssignUserstoGroups(welcomeUserClient, userIds.Result, assignedGroupId, welcomeGroupId, log);
+
+                            if (response == "")
+                            {
+                                await UpdateLastSyncDate(onboardUserClient, siteId, listId, itemId, log);
+                            }
+                            else
+                            {
+                                string details = $"{response}<br />Department: {Abbreviation}<br />Group Id: {groupId}<br />User Ids: {JsonConvert.SerializeObject(userIds.Result)}";
+                                sendEmail(config["emailUserName"], config["emailUserSecret"], config["recipientAddress"], "Assign users failed", details, log);
+                            }
                         }
                     }
                     else {
-                        // ERROR – (Need a way to get this info… Maybe in the sp list?)
-                        // What if we make it a mandatory field to prevent this error?
+                        log.LogInformation($"Null sync date - Department: {Abbreviation} - Group Id: {groupId}");
+                        string details = $"Department: {Abbreviation}<br />Group Id: {groupId}";
+                        sendEmail(config["emailUserName"], config["emailUserSecret"], config["recipientAddress"], "Null sync date", details, log);
                     }
                 }
             }
@@ -184,16 +196,16 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
                     requestConfiguration.QueryParameters.Select = new string[] { "id", "displayName", "createdDateTime" };
 
                     // Error: Request_UnsupportedQuery Operator: 'Less' is not supported
-                    // cannot use less than operator so need to do another check in the foreach loop
-                    //requestConfiguration.QueryParameters.Filter = $"createdDateTime lt {LastSyncDate.ToString(format)}";
-                    requestConfiguration.QueryParameters.Filter = $"createdDateTime le {LastSyncDate.ToString(format)}";
+                    // cannot use less than operator (lt) so need to do another check in the foreach loop
+                    // https://learn.microsoft.com/en-us/graph/aad-advanced-queries?tabs=http#application-properties
+                    requestConfiguration.QueryParameters.Filter = $"createdDateTime ge {LastSyncDate.ToString(format)}";
 
                     requestConfiguration.Headers.Add("ConsistencyLevel", "eventual");
                 });
 
                 foreach (User member in members.Value)
                 {
-                    if (member.CreatedDateTime < LastSyncDate)
+                    if (member.CreatedDateTime > LastSyncDate)
                     {
                         userIds.Add(member.Id);
                     }
@@ -265,6 +277,8 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
             foreach (string userId in userIds)
             {
                 userList.Add($"https://graph.microsoft.com/v1.0/directoryObjects/{userId}");
+
+                log.LogInformation($"userId: {userId}");
             }
 
             log.LogInformation($"Add to assigned group id = {assignedGroupId}");
@@ -347,11 +361,6 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
         {
             var graphAPIAuth = new GraphServiceClient(new ROPCConfidentialTokenCredential(emailUserName, emailUserSecret, log));
 
-            //Add email notification for these incidents:
-            //	Add to group fails
-            //	Get security group Id fails
-            //Send to: gcxgce-admin@tbs-sct.gc.ca
-
             try
             {
                 var requestBody = new Microsoft.Graph.Me.SendMail.SendMailPostRequestBody
@@ -362,7 +371,7 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
                         Body = new ItemBody
                         {
                             ContentType = BodyType.Html,
-                            Content = @$"<strong>Details</strong><br /><p>{details}</p>"
+                            Content = @$"<p>{details}</p>"
                         },
                         ToRecipients = new List<Recipient>
                         {
