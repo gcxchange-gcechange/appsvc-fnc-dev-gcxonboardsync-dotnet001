@@ -32,10 +32,10 @@ MSGraph
 
 | API / Permissions name    | Type      | Admin consent | Justification                       |
 | ------------------------- | --------- | ------------- | ----------------------------------- |
-| Directory.Read.All        | Delegated | Yes           | Read group members                  |
-| GroupMember.ReadWrite.All | Delegated | Yes           | Assign members to groups            |
+| GroupMember.ReadWrite.All | Delegated | Yes           | Read and assign members to groups   |
 | Mail.Send                 | Delegated | Yes           | Send failure notifications by email | 
 | Sites.ReadWrite.All       | Delegated | Yes           | Read and update SharePoint list     |
+| User.Read.All             | Delegated | Yes           | Read createdDateTime property       |
 
 Sharepoint
 
