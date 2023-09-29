@@ -2,7 +2,7 @@
 
 ## Summary
 
-Syncs users between IDF and GCXchange 
+Syncs users between IDF (Identity Federation) and GCXchange 
 - get a list of synced deparments
 - loop through the list and perform the following actions for each department:
   - get the security group id from a json file in the storage account
