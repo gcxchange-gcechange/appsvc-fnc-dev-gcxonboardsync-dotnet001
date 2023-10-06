@@ -12,56 +12,25 @@ using Newtonsoft.Json;
 using Microsoft.WindowsAzure.Storage;
 using Microsoft.Graph;
 using static appsvc_fnc_dev_gcxonboardsync_dotnet001.Auth;
-
-//todo
-// - figure out issue with lt (less than) in query with createdDateTime - done but not elegant
-
-// - check that user is not already a member of group before adding
-//      - One or more added object references already exist for the following modified properties: 'members'.
-//      - ok to ignore error for now?
-//      - email notification on failure?
+using System.Linq;
 
 namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
 {
-    public class SyncConfig
+    public class GroupAliasToResourceTenantGroupObjectIdMapping
     {
-        public string Enabled { get; set; }
-        public string TenantCacheRefreshEnabled { get; set; }
-        public string DeptAlias { get; set; }
-        public string B2BGroupSyncAlias { get; set; }
-        public string B2BGroupSyncSource { get; set; }
-        public string DataContainerName { get; set; }
-        public string NotifyUsersOnAccessGranted { get; set; }
-        public string NotifyUsersOnAccessRemoved { get; set; }
-        public string AccessGrantedNotificationTemplate { get; set; }
-        public string AccessGrantedNotificationSubject { get; set; }
-        public string AccessRemovedNotificationTemplate { get; set; }
-        public string AccessRemovedNotificationSubject { get; set; }
-        public string[] EmailNotificationListForUsersThatCannotBeInvited { get; set; }
-        //public GroupAliasToResourceTenantGroup GroupAliasToResourceTenantGroupObjectIdMapping { get; set; }  // -> CIPHER_Group -> ResourceTenantGroupObjectId
-        public object GroupAliasToResourceTenantGroupObjectIdMapping { get; set; }  // -> CIPHER_Group -> ResourceTenantGroupObjectId
+        [JsonProperty(PropertyName = "GroupAliasToResourceTenantGroupObjectIdMapping")]
+        public Dictionary<string, ResourceTenantGroupObject> ResourceTenantGroupObject { get; set; }
+    }
 
-        // 	"GroupAliasToResourceTenantGroupObjectIdMapping": {
-        //         "CIPHER_Group": { 
-        //             "ResourceTenantGroupObjectId": "3928b327-581b-480d-9a69-46a6e6f0bab9"
-        //         }
-        //     }
-
-        // Refactor this!!
-
-        //public class GroupAliasToResourceTenantGroup {
-        //    public ResourceTenantGroup TenantGroup;
-        //}
-
-        //public class ResourceTenantGroup {
-        //    public string ResourceTenantGroupObjectId;
-        //}
+    public class ResourceTenantGroupObject
+    {
+        public string ResourceTenantGroupObjectId { get; set; }
     }
 
     public class OnboardUsers
     {
         [FunctionName("OnboardUsers")]
-        public static async Task RunAsync([TimerTrigger("0 */5 * * * *")]TimerInfo myTimer, ILogger log)
+        public static async Task RunAsync([TimerTrigger("0 */5 * * * *")] TimerInfo myTimer, ILogger log)
         {
             log.LogInformation($"OnboardUsers received a request.");
 
@@ -81,37 +50,62 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
             var welcomeUserClient = new GraphServiceClient(new ROPCConfidentialTokenCredential(config["welcomeUserName"], config["welcomeUserSecret"], log));
 
             List<ListItem> departmentList = await GetSyncedDepartmentList(onboardUserClient, siteId, listId, log);
+            log.LogInformation($"departmentList.Count = {departmentList.Count}");
 
             if (departmentList != null)
             {
-                log.LogInformation($"departmentList.Count = {departmentList.Count}");
-                foreach (ListItem item in departmentList)
+                foreach (ListItem department in departmentList)
                 {
-                    string Abbreviation = item.Fields.AdditionalData["Abbreviation"].ToString();
-                    DateTime? LastSyncDate = item.Fields.AdditionalData.Keys.Contains("LastSyncDate") ? (DateTime)item.Fields.AdditionalData["LastSyncDate"] : null;
-                    //string RGCode = item.Fields.AdditionalData["RGCode"].ToString();
-                    string itemId = item.Id;
+                    string Abbreviation = department.Fields.AdditionalData["Abbreviation"].ToString();
+                    DateTime? LastSyncDate = department.Fields.AdditionalData.Keys.Contains("LastSyncDate") ? (DateTime)department.Fields.AdditionalData["LastSyncDate"] : null;
+                    string itemId = department.Id;
                     var groupId = GetSecurityGroupId(Abbreviation, AzureWebJobsStorage, containerName, fileNameSuffix, log);
+
+                    log.LogInformation($"Abbreviation: {Abbreviation}");
+                    log.LogInformation($"LastSyncDate: {LastSyncDate}");
+                    log.LogInformation($"groupId: {groupId}");
+
+                    if (groupId == "")
+                    {
+                        sendEmail(config["emailUserName"], config["emailUserSecret"], config["recipientAddress"], "Can't find security group id", Abbreviation, log);
+                        continue;  // continue with next department in the foreach loop
+                    }
 
                     if (LastSyncDate != null)
                     {
                         var userIds = GetUsersToOnboard(onboardUserClient, groupId, (DateTime)LastSyncDate, log);
-                        string welcomeGroupId = GetWelcomeGroupId(welcomeUserClient, welcomeGroupIds, userIds.Result.Count, WelcomeGroupMemberLimit, log).Result;
-                        await AssignUserstoGroups(welcomeUserClient, userIds.Result, assignedGroupId, welcomeGroupId, log);
-                        await UpdateLastSyncDate(onboardUserClient, siteId, listId, itemId, log);
+
+                        log.LogInformation($"userIds.Result.Count: {userIds.Result.Count}");
+
+                        if (userIds.Result.Count > 0)
+                        {
+                            string welcomeGroupId = GetWelcomeGroupId(welcomeUserClient, welcomeGroupIds, userIds.Result.Count, WelcomeGroupMemberLimit, log).Result;
+                            string response = await AssignUserstoGroups(welcomeUserClient, userIds.Result, assignedGroupId, welcomeGroupId, log);
+
+                            if (response == "")
+                            {
+                                await UpdateLastSyncDate(onboardUserClient, siteId, listId, itemId, log);
+                            }
+                            else
+                            {
+                                string details = $"{response.Replace(Environment.NewLine, "<br / >")}<br />Department: {Abbreviation}<br />Group Id: {groupId}<br />User Ids: {JsonConvert.SerializeObject(userIds.Result)}";
+                                sendEmail(config["emailUserName"], config["emailUserSecret"], config["recipientAddress"], "Assign users failed", details, log);
+                            }
+                        }
                     }
                     else
                     {
-                        // ERROR – (Need a way to get this info… Maybe in the sp list?)
-                        // What if we make it a mandatory field to prevent this error?
+                        log.LogInformation($"Null sync date - Department: {Abbreviation} - Group Id: {groupId}");
+                        string details = $"Department: {Abbreviation}<br />Group Id: {groupId}";
+                        sendEmail(config["emailUserName"], config["emailUserSecret"], config["recipientAddress"], "Null sync date", details, log);
                     }
                 }
             }
             else
             {
-                log.LogInformation("null synced department list");
+                log.LogInformation("departmentList has null value");
             }
-            
+
             log.LogInformation($"OnboardUsers processed a request.");
         }
 
@@ -125,7 +119,7 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
             {
                 var items = await graphAPIAuth.Sites[siteId].Lists[listId].Items.GetAsync((requestConfiguration) =>
                 {
-                    requestConfiguration.QueryParameters.Expand = new string[] { "fields($select=Abbreviation,RGCode,LastSyncDate)" };
+                    requestConfiguration.QueryParameters.Expand = new string[] { "fields($select=Abbreviation,LastSyncDate)" };
                 });
 
                 itemList.AddRange(items.Value);
@@ -164,20 +158,30 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
             log.LogInformation("GetSecurityGroupId received a request.");
 
             string fileName = $"{departmentAbbreviation}{fileNameSuffix}";
+            string groupId = "";
 
-            CloudStorageAccount storageAccount = CloudStorageAccount.Parse(AzureWebJobsStorage);
-            CloudBlobClient serviceClient = storageAccount.CreateCloudBlobClient();
-            CloudBlobContainer container = serviceClient.GetContainerReference($"{containerName}");
-            CloudBlockBlob blob = container.GetBlockBlobReference($"{fileName}");
+            try
+            {
+                CloudStorageAccount storageAccount = CloudStorageAccount.Parse(AzureWebJobsStorage);
+                CloudBlobClient serviceClient = storageAccount.CreateCloudBlobClient();
+                CloudBlobContainer container = serviceClient.GetContainerReference($"{containerName}");
+                CloudBlockBlob blob = container.GetBlockBlobReference($"{fileName}");
 
-            string contents = blob.DownloadTextAsync().Result;
-            var result = JsonConvert.DeserializeObject<SyncConfig>(contents);
+                string contents = blob.DownloadTextAsync().Result;
+                var d = JsonConvert.DeserializeObject<GroupAliasToResourceTenantGroupObjectIdMapping>(contents);
 
-            // get groupId - this is messy, consider a more elegant implementation
-            string mapping = result.GroupAliasToResourceTenantGroupObjectIdMapping.ToString();
-            const string searchFor = "\"ResourceTenantGroupObjectId\": \"";
-            int startIndex = mapping.IndexOf(searchFor) + searchFor.Length;
-            string groupId = mapping.Substring(startIndex, 36); // e.g. length of 3928b327-581b-480d-9a69-46a6e6f0bab9
+                ResourceTenantGroupObject r;
+                var first = d.ResourceTenantGroupObject.First();
+                d.ResourceTenantGroupObject.TryGetValue(first.Key, out r);
+
+                groupId = r.ResourceTenantGroupObjectId;
+            }
+            catch (Exception e)
+            {
+                log.LogError($"Message: {e.Message}");
+                if (e.InnerException is not null) log.LogError($"InnerException: {e.InnerException.Message}");
+                log.LogError($"StackTrace: {e.StackTrace}");
+            }
 
             log.LogInformation("GetSecurityGroupId processed a request.");
 
@@ -199,16 +203,16 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
                     requestConfiguration.QueryParameters.Select = new string[] { "id", "displayName", "createdDateTime" };
 
                     // Error: Request_UnsupportedQuery Operator: 'Less' is not supported
-                    // cannot use less than operator so need to do another check in the foreach loop
-                    //requestConfiguration.QueryParameters.Filter = $"createdDateTime lt {LastSyncDate.ToString(format)}";
-                    requestConfiguration.QueryParameters.Filter = $"createdDateTime le {LastSyncDate.ToString(format)}";
+                    // cannot use less than operator (lt) so need to do another check in the foreach loop
+                    // https://learn.microsoft.com/en-us/graph/aad-advanced-queries?tabs=http#application-properties
+                    requestConfiguration.QueryParameters.Filter = $"createdDateTime ge {LastSyncDate.ToString(format)}";
 
                     requestConfiguration.Headers.Add("ConsistencyLevel", "eventual");
                 });
 
                 foreach (User member in members.Value)
                 {
-                    if (member.CreatedDateTime < LastSyncDate)
+                    if (member.CreatedDateTime > LastSyncDate)
                     {
                         userIds.Add(member.Id);
                     }
@@ -270,15 +274,18 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
             return welcomeGroupId;
         }
 
-        private static async Task<bool> AssignUserstoGroups(GraphServiceClient graphAPIAuth, List<string> userIds, string assignedGroupId, string welcomeGroupId, ILogger log)
+        private static async Task<string> AssignUserstoGroups(GraphServiceClient graphAPIAuth, List<string> userIds, string assignedGroupId, string welcomeGroupId, ILogger log)
         {
             log.LogInformation("AssignUserstoGroups received a request.");
 
             List<string> userList = new();
+            string errorMessage = "";
 
             foreach (string userId in userIds)
             {
                 userList.Add($"https://graph.microsoft.com/v1.0/directoryObjects/{userId}");
+
+                log.LogInformation($"userId: {userId}");
             }
 
             log.LogInformation($"Add to assigned group id = {assignedGroupId}");
@@ -290,12 +297,14 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
             {
                 log.LogError($"odataError.Error.Code: {odataError.Error.Code}");
                 log.LogError($"odataError.Error.Message: {odataError.Error.Message}");
+                errorMessage = $"{odataError.Error.Message} - assigned group id: {assignedGroupId}";
             }
             catch (Exception e)
             {
                 log.LogError($"Message: {e.Message}");
                 if (e.InnerException is not null) log.LogError($"InnerException: {e.InnerException.Message}");
                 log.LogError($"StackTrace: {e.StackTrace}");
+                errorMessage = $"{e.Message} - assigned group id: {assignedGroupId}";
             }
 
             log.LogInformation($"Add to welcome group id = {welcomeGroupId}");
@@ -307,17 +316,19 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
             {
                 log.LogError($"odataError.Error.Code: {odataError.Error.Code}");
                 log.LogError($"odataError.Error.Message: {odataError.Error.Message}");
+                errorMessage = errorMessage + Environment.NewLine + $"{odataError.Error.Message} - welcome group id: {welcomeGroupId}";
             }
             catch (Exception e)
             {
                 log.LogError($"Message: {e.Message}");
                 if (e.InnerException is not null) log.LogError($"InnerException: {e.InnerException.Message}");
                 log.LogError($"StackTrace: {e.StackTrace}");
+                errorMessage = errorMessage + Environment.NewLine + $"{e.Message} - welcome group id: {welcomeGroupId}";
             }
 
             log.LogInformation("AssignUserstoGroups processed a request.");
 
-            return true;
+            return errorMessage;
         }
 
         private static async Task<bool> UpdateLastSyncDate(GraphServiceClient graphAPIAuth, string siteId, string listId, string itemId, ILogger log)
@@ -353,24 +364,40 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
             return true;
         }
 
+        public static async void sendEmail(string emailUserName, string emailUserSecret, string recipientAddress, string failureReason, string details, ILogger log)
+        {
+            var graphAPIAuth = new GraphServiceClient(new ROPCConfidentialTokenCredential(emailUserName, emailUserSecret, log));
 
+            try
+            {
+                var requestBody = new Microsoft.Graph.Me.SendMail.SendMailPostRequestBody
+                {
+                    Message = new Message
+                    {
+                        Subject = $"GCX - Onboarding Error: {failureReason}",
+                        Body = new ItemBody
+                        {
+                            ContentType = BodyType.Html,
+                            Content = @$"<p>{details}</p>"
+                        },
+                        ToRecipients = new List<Recipient>
+                        {
+                            new Recipient { EmailAddress = new EmailAddress { Address =  $"{recipientAddress}" } }
+                        }
+                    }
+                };
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+                await graphAPIAuth.Me.SendMail.PostAsync(requestBody);
+            }
+            catch (ODataError odataError)
+            {
+                log.LogError(odataError.Error.Code);
+                log.LogError(odataError.Error.Message);
+            }
+            catch (Exception e)
+            {
+                log.LogInformation($"Error: {e.Message}");
+            }
+        }
     }
 }

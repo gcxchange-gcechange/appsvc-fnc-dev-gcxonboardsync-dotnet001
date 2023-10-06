@@ -362,3 +362,4 @@ MigrationBackup/
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
 /appsvc-fnc-dev-gcxonboardsync-dotnet001/Function1.cs
+/appsvc-fnc-dev-gcxonboardsync-dotnet001/AuthLocal.cs
