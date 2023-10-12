@@ -62,7 +62,7 @@ n/a
 | siteId                  | Id of the SharePoint site that hosts the list of synced departments           |
 | tenantId                | Id of the Azure tenant that hosts the function app                            |
 | welcomeGroupIds         | Comma separated list of Ids for the welcome group(s)                          |
-| welcomeUserName         | User principal name for the service account that performs welcome group tasks |
+| welcomeUserName         | Email address for the service account that performs welcome group tasks |
 | welcomeUserSecret       | Secret name for welcomeUserName                                               |
 
 ## Version history
