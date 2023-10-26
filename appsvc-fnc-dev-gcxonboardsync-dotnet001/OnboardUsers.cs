@@ -7,33 +7,20 @@ using Microsoft.Graph.Models;
 using System.Threading.Tasks;
 using Microsoft.Kiota.Abstractions;
 using Microsoft.Graph.Models.ODataErrors;
-using Microsoft.WindowsAzure.Storage.Blob;
 using Newtonsoft.Json;
-using Microsoft.WindowsAzure.Storage;
 using Microsoft.Graph;
 using static appsvc_fnc_dev_gcxonboardsync_dotnet001.Auth;
-using System.Linq;
 
 namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
 {
-    public class GroupAliasToResourceTenantGroupObjectIdMapping
-    {
-        [JsonProperty(PropertyName = "GroupAliasToResourceTenantGroupObjectIdMapping")]
-        public Dictionary<string, ResourceTenantGroupObject> ResourceTenantGroupObject { get; set; }
-    }
-
-    public class ResourceTenantGroupObject
-    {
-        public string ResourceTenantGroupObjectId { get; set; }
-    }
-
     public class OnboardUsers
     {
+        static List<ListItem> departmentList;
+
         [FunctionName("OnboardUsers")]
         public static async Task RunAsync([TimerTrigger("0 */5 * * * *")] TimerInfo myTimer, ILogger log)
         {
             log.LogInformation($"OnboardUsers received a request.");
-
             const int WelcomeGroupMemberLimit = 24900;
 
             IConfiguration config = new ConfigurationBuilder().AddJsonFile("appsettings.json", optional: true, reloadOnChange: true).AddEnvironmentVariables().Build();
@@ -49,27 +36,52 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
             var onboardUserClient = new GraphServiceClient(new ROPCConfidentialTokenCredential(config["onboardUserName"], config["onboardUserSecret"], log));
             var welcomeUserClient = new GraphServiceClient(new ROPCConfidentialTokenCredential(config["welcomeUserName"], config["welcomeUserSecret"], log));
 
-            List<ListItem> departmentList = await GetSyncedDepartmentList(onboardUserClient, siteId, listId, log);
-            log.LogInformation($"departmentList.Count = {departmentList.Count}");
+            string abbreviation;
+            string groupId;
+            string itemId;
+            DateTime? LastSyncDate;
+            string RGCode;
 
-            if (departmentList != null)
+            Auth auth = new Auth();
+            var graphClient = auth.graphAuth(log);
+
+            try
             {
-                foreach (ListItem department in departmentList)
+                departmentList = await GetSyncedDepartmentList(onboardUserClient, siteId, listId, log);
+
+                var groups = await graphClient.Groups.GetAsync((requestConfiguration) =>
                 {
-                    string Abbreviation = department.Fields.AdditionalData["Abbreviation"].ToString();
-                    DateTime? LastSyncDate = department.Fields.AdditionalData.Keys.Contains("LastSyncDate") ? (DateTime)department.Fields.AdditionalData["LastSyncDate"] : null;
-                    string itemId = department.Id;
-                    var groupId = GetSecurityGroupId(Abbreviation, AzureWebJobsStorage, containerName, fileNameSuffix, log);
+                    requestConfiguration.QueryParameters.Count = true;
+                    requestConfiguration.QueryParameters.Filter = "NOT(groupTypes/any(c:c eq 'Unified'))";
+                    requestConfiguration.QueryParameters.Search = "\"displayName:_B2B_Sync\"";
+                    requestConfiguration.QueryParameters.Select = new string[] { "id", "displayName" };
+                    requestConfiguration.Headers.Add("ConsistencyLevel", "eventual");
+                });
 
-                    log.LogInformation($"Abbreviation: {Abbreviation}");
-                    log.LogInformation($"LastSyncDate: {LastSyncDate}");
-                    log.LogInformation($"groupId: {groupId}");
+                foreach (var group in groups.Value)
+                {
+                    groupId = group.Id;
 
-                    if (groupId == "")
+                    // e.g. 056_TBS_B2B_Sync
+                    RGCode = group.DisplayName.Split("_")[0];
+                    abbreviation = group.DisplayName.Split("_")[1];
+
+                    var department = GetDepartment(RGCode);
+
+                    if (department == null)
                     {
-                        sendEmail(config["emailUserName"], config["emailUserSecret"], config["recipientAddress"], "Can't find security group id", Abbreviation, log);
-                        continue;  // continue with next department in the foreach loop
+                        sendEmail(config["emailUserName"], config["emailUserSecret"], config["recipientAddress"], "Can't find synced department", abbreviation, log);
+                        continue;  // continue with next item in the foreach loop
                     }
+
+                    itemId = department.Id;
+                    LastSyncDate = department.Fields.AdditionalData.Keys.Contains("LastSyncDate") ? (DateTime)department.Fields.AdditionalData["LastSyncDate"] : null;
+
+                    log.LogInformation($"group.DisplayName = {group.DisplayName}");
+                    log.LogInformation($"RGCode = {RGCode}");
+                    log.LogInformation($"abbreviation = {abbreviation}");
+                    log.LogInformation($"LastSyncDate = {LastSyncDate}");
+                    log.LogInformation($"itemId = {itemId}");
 
                     if (LastSyncDate != null)
                     {
@@ -88,25 +100,45 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
                             }
                             else
                             {
-                                string details = $"{response.Replace(Environment.NewLine, "<br / >")}<br />Department: {Abbreviation}<br />Group Id: {groupId}<br />User Ids: {JsonConvert.SerializeObject(userIds.Result)}";
+                                string details = $"{response.Replace(Environment.NewLine, "<br / >")}<br />Department: {abbreviation}<br />Group Id: {groupId}<br />User Ids: {JsonConvert.SerializeObject(userIds.Result)}";
                                 sendEmail(config["emailUserName"], config["emailUserSecret"], config["recipientAddress"], "Assign users failed", details, log);
                             }
                         }
                     }
                     else
                     {
-                        log.LogInformation($"Null sync date - Department: {Abbreviation} - Group Id: {groupId}");
-                        string details = $"Department: {Abbreviation}<br />Group Id: {groupId}";
+                        log.LogInformation($"Null sync date - Department: {abbreviation} - Group Id: {groupId}");
+                        string details = $"Department: {abbreviation}<br />Group Id: {groupId}";
                         sendEmail(config["emailUserName"], config["emailUserSecret"], config["recipientAddress"], "Null sync date", details, log);
                     }
                 }
             }
-            else
+            catch (ODataError odataError)
             {
-                log.LogInformation("departmentList has null value");
+                log.LogError(odataError.Error.Code);
+                log.LogError(odataError.Error.Message);
+            }
+            catch (Exception e)
+            {
+                log.LogError($"Message: {e.Message}");
+                if (e.InnerException is not null) log.LogError($"InnerException: {e.InnerException.Message}");
+                log.LogError($"StackTrace: {e.StackTrace}");
             }
 
             log.LogInformation($"OnboardUsers processed a request.");
+        }
+
+        private static ListItem GetDepartment(string RGCode)
+        {
+            foreach (ListItem department in departmentList)
+            {
+                if (department.Fields.AdditionalData["RGCode"].ToString() == RGCode)
+                {
+                    return department;
+                }
+            }
+
+            return null;
         }
 
         private static async Task<List<ListItem>> GetSyncedDepartmentList(GraphServiceClient graphAPIAuth, string siteId, string listId, ILogger log)
@@ -119,7 +151,7 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
             {
                 var items = await graphAPIAuth.Sites[siteId].Lists[listId].Items.GetAsync((requestConfiguration) =>
                 {
-                    requestConfiguration.QueryParameters.Expand = new string[] { "fields($select=Abbreviation,LastSyncDate)" };
+                    requestConfiguration.QueryParameters.Expand = new string[] { "fields($select=Abbreviation,RGCode,LastSyncDate)" };
                 });
 
                 itemList.AddRange(items.Value);
@@ -151,41 +183,6 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
             log.LogInformation("GetSyncedDepartmentList processed a request.");
 
             return itemList;
-        }
-
-        private static string GetSecurityGroupId(string departmentAbbreviation, string AzureWebJobsStorage, string containerName, string fileNameSuffix, ILogger log)
-        {
-            log.LogInformation("GetSecurityGroupId received a request.");
-
-            string fileName = $"{departmentAbbreviation}{fileNameSuffix}";
-            string groupId = "";
-
-            try
-            {
-                CloudStorageAccount storageAccount = CloudStorageAccount.Parse(AzureWebJobsStorage);
-                CloudBlobClient serviceClient = storageAccount.CreateCloudBlobClient();
-                CloudBlobContainer container = serviceClient.GetContainerReference($"{containerName}");
-                CloudBlockBlob blob = container.GetBlockBlobReference($"{fileName}");
-
-                string contents = blob.DownloadTextAsync().Result;
-                var d = JsonConvert.DeserializeObject<GroupAliasToResourceTenantGroupObjectIdMapping>(contents);
-
-                ResourceTenantGroupObject r;
-                var first = d.ResourceTenantGroupObject.First();
-                d.ResourceTenantGroupObject.TryGetValue(first.Key, out r);
-
-                groupId = r.ResourceTenantGroupObjectId;
-            }
-            catch (Exception e)
-            {
-                log.LogError($"Message: {e.Message}");
-                if (e.InnerException is not null) log.LogError($"InnerException: {e.InnerException.Message}");
-                log.LogError($"StackTrace: {e.StackTrace}");
-            }
-
-            log.LogInformation("GetSecurityGroupId processed a request.");
-
-            return groupId;
         }
 
         private static async Task<List<string>> GetUsersToOnboard(GraphServiceClient graphAPIAuth, string securityGroupId, DateTime LastSyncDate, ILogger log)
