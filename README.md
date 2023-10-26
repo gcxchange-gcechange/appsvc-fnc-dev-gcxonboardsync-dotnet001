@@ -30,12 +30,13 @@ Note that user account design can be modified to suit your environment
 
 MSGraph
 
-| API / Permissions name    | Type      | Admin consent | Justification                       |
-| ------------------------- | --------- | ------------- | ----------------------------------- |
-| GroupMember.ReadWrite.All | Delegated | Yes           | Read and assign members to groups   |
-| Mail.Send                 | Delegated | Yes           | Send failure notifications by email | 
-| Sites.ReadWrite.All       | Delegated | Yes           | Read and update SharePoint list     |
-| User.Read.All             | Delegated | Yes           | Read createdDateTime property       |
+| API / Permissions name    | Type        | Admin consent | Justification                       |
+| ------------------------- | ----------- | ------------- | ----------------------------------- |
+| Group.Read.All            | Application | Yes           | Read security groups                |
+| GroupMember.ReadWrite.All | Delegated   | Yes           | Read and assign members to groups   |
+| Mail.Send                 | Delegated   | Yes           | Send failure notifications by email | 
+| Sites.ReadWrite.All       | Delegated   | Yes           | Read and update SharePoint list     |
+| User.Read.All             | Delegated   | Yes           | Read createdDateTime property       |
 
 Sharepoint
 
