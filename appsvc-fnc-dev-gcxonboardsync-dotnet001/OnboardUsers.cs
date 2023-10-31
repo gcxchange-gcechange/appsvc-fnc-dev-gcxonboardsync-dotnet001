@@ -17,8 +17,10 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
     {
         static List<ListItem> departmentList;
 
+        // Timer: at minute 30 past every 2nd hour
+
         [FunctionName("OnboardUsers")]
-        public static async Task RunAsync([TimerTrigger("0 */5 * * * *")] TimerInfo myTimer, ILogger log)
+        public static async Task RunAsync([TimerTrigger("0 30 */2 * * *")] TimerInfo myTimer, ILogger log)
         {
             log.LogInformation($"OnboardUsers received a request.");
             const int WelcomeGroupMemberLimit = 24900;
