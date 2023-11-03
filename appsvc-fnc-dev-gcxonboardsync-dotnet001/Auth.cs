@@ -147,12 +147,19 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
                     new KeyValuePair<string, string>("grant_type", "password")
                 };
 
+                _log.LogInformation($"_clientId: {_clientId}");
+                _log.LogInformation($"scope: {string.Join(" ", requestContext.Scopes)}");
+                _log.LogInformation($"username: {_username}");
+
                 HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, _tokenEndpoint)
                 {
                     Content = new FormUrlEncodedContent(Parameters)
                 };
 
                 var response = httpClient.SendAsync(request).Result.Content.ReadAsStringAsync().Result;
+
+                _log.LogInformation($"response: {response}");
+
                 dynamic responseJson = JsonConvert.DeserializeObject(response);
                 var expirationDate = DateTimeOffset.UtcNow.AddMinutes(60.0);
                 return new ValueTask<AccessToken>(new AccessToken(responseJson.access_token.ToString(), expirationDate));

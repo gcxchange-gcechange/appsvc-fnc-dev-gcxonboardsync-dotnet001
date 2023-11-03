@@ -149,14 +149,23 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
 
             List<ListItem> itemList = new List<ListItem>();
 
+            log.LogInformation($"siteId: {siteId}");
+            log.LogInformation($"listId: {listId}");
+
             try
             {
+                log.LogInformation("1");
+
                 var items = await graphAPIAuth.Sites[siteId].Lists[listId].Items.GetAsync((requestConfiguration) =>
                 {
                     requestConfiguration.QueryParameters.Expand = new string[] { "fields($select=Abbreviation,RGCode,LastSyncDate)" };
                 });
 
+                log.LogInformation("2");
+
                 itemList.AddRange(items.Value);
+
+                log.LogInformation("3");
 
                 while (items.OdataNextLink != null)
                 {
@@ -169,6 +178,8 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
                     items = await graphAPIAuth.RequestAdapter.SendAsync(nextPageRequestInformation, (parseNode) => new ListItemCollectionResponse());
                     itemList.AddRange(items.Value);
                 }
+
+                log.LogInformation("4");
             }
             catch (ODataError odataError)
             {
