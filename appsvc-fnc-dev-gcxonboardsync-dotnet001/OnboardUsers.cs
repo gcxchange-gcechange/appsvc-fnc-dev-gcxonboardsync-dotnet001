@@ -15,14 +15,13 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
 {
     public class OnboardUsers
     {
-        static List<ListItem> departmentList;
-
         // Timer: at minute 30 past every 2nd hour
-
         [FunctionName("OnboardUsers")]
         public static async Task RunAsync([TimerTrigger("0 30 */2 * * *")] TimerInfo myTimer, ILogger log)
         {
             log.LogInformation($"OnboardUsers received a request.");
+
+            const int AssignUserLimit = 20;
             const int WelcomeGroupMemberLimit = 24900;
 
             IConfiguration config = new ConfigurationBuilder().AddJsonFile("appsettings.json", optional: true, reloadOnChange: true).AddEnvironmentVariables().Build();
@@ -49,70 +48,100 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
 
             try
             {
-                departmentList = await GetSyncedDepartmentList(onboardUserClient, siteId, listId, log);
+                List<ListItem> departmentList = await GetSyncedDepartmentList(onboardUserClient, siteId, listId, log);
 
-                var groups = await graphClient.Groups.GetAsync((requestConfiguration) =>
+                foreach (var department in departmentList)
                 {
-                    requestConfiguration.QueryParameters.Count = true;
-                    requestConfiguration.QueryParameters.Filter = "NOT(groupTypes/any(c:c eq 'Unified'))";
-                    requestConfiguration.QueryParameters.Search = "\"displayName:_B2B_Sync\"";
-                    requestConfiguration.QueryParameters.Select = new string[] { "id", "displayName" };
-                    requestConfiguration.Headers.Add("ConsistencyLevel", "eventual");
-                });
+                    abbreviation = department.Fields.AdditionalData["Abbreviation"].ToString();
+                    RGCode = department.Fields.AdditionalData["RGCode"].ToString();
 
-                foreach (var group in groups.Value)
-                {
-                    groupId = group.Id;
+                    var groups = await graphClient.Groups.GetAsync((requestConfiguration) =>
+                    {
+                        requestConfiguration.QueryParameters.Count = true;
+                        requestConfiguration.QueryParameters.Filter = "NOT(groupTypes/any(c:c eq 'Unified'))";
+                        requestConfiguration.QueryParameters.Search = $"\"displayName:{RGCode}_{abbreviation}_B2B_Sync\"";
+                        requestConfiguration.QueryParameters.Select = new string[] { "id", "displayName" };
+                        requestConfiguration.Headers.Add("ConsistencyLevel", "eventual");
+                    });
 
-                    // e.g. 056_TBS_B2B_Sync
-                    RGCode = group.DisplayName.Split("_")[0];
-                    abbreviation = group.DisplayName.Split("_")[1];
+                    if (groups.Value.Count > 0)
+                    {
+                        // there should only be one group so get the first value
+                        var group = groups.Value[0];
 
-                    var department = GetDepartment(RGCode);
+                        groupId = group.Id;
+                        itemId = department.Id;
+                        LastSyncDate = department.Fields.AdditionalData.Keys.Contains("LastSyncDate") ? (DateTime)department.Fields.AdditionalData["LastSyncDate"] : null;
 
-                    if (department == null)
+                        log.LogInformation($"group.DisplayName = {group.DisplayName}");
+                        log.LogInformation($"RGCode = {RGCode}");
+                        log.LogInformation($"abbreviation = {abbreviation}");
+                        log.LogInformation($"LastSyncDate = {LastSyncDate}");
+                        log.LogInformation($"itemId = {itemId}");
+
+                        if (LastSyncDate != null)
+                        {
+                            var userIds = GetUsersToOnboard(onboardUserClient, groupId, (DateTime)LastSyncDate, log);
+
+                            log.LogInformation($"userIds.Result.Count: {userIds.Result.Count}");
+
+                            if (userIds.Result.Count > 0)
+                            {
+                                string welcomeGroupId = GetWelcomeGroupId(welcomeUserClient, welcomeGroupIds, userIds.Result.Count, WelcomeGroupMemberLimit, log).Result;
+
+                                string response = "";
+                                int userIdCount = 0;
+                                List<string> userIdList = new();
+
+                                foreach (string userId in userIds.Result)
+                                {
+                                    userIdList.Add(userId);
+                                    userIdCount += 1;
+
+                                    log.LogInformation($"userIdCount = {userIdCount}");
+
+                                    if (userIdCount == AssignUserLimit)
+                                    {
+                                        response = await AssignUserstoGroups(welcomeUserClient, userIdList, assignedGroupId, welcomeGroupId, log);
+                                        userIdCount = 0;
+                                        userIdList.Clear();
+                                        if (response != "")
+                                        {
+                                            break;  // an error occurred, break from the loop
+                                        }
+                                    }
+                                }
+
+                                // catch any stragglers and process if no errors, i.e. response equals empty string
+                                if ((userIdCount > 0) && (response == ""))
+                                {
+                                    response = await AssignUserstoGroups(welcomeUserClient, userIdList, assignedGroupId, welcomeGroupId, log);
+                                }
+
+                                if (response == "")
+                                {
+                                    await UpdateLastSyncDate(onboardUserClient, siteId, listId, itemId, log);
+                                }
+                                else
+                                {
+                                    string details = $"{response.Replace(Environment.NewLine, "<br / >")}<br />Department: {abbreviation}<br />Group Id: {groupId}<br />User Ids: {JsonConvert.SerializeObject(userIds.Result)}";
+                                    sendEmail(config["emailUserName"], config["emailUserSecret"], config["recipientAddress"], "Assign users failed", details, log);
+                                }
+                            }
+                        }
+                        else
+                        {
+                            log.LogInformation($"Null sync date - Department: {abbreviation} - Group Id: {groupId}");
+                            string details = $"Department: {abbreviation}<br />Group Id: {groupId}";
+                            sendEmail(config["emailUserName"], config["emailUserSecret"], config["recipientAddress"], "Null sync date", details, log);
+                        }
+                    }
+                    else
                     {
                         sendEmail(config["emailUserName"], config["emailUserSecret"], config["recipientAddress"], "Can't find synced department", abbreviation, log);
                         continue;  // continue with next item in the foreach loop
                     }
 
-                    itemId = department.Id;
-                    LastSyncDate = department.Fields.AdditionalData.Keys.Contains("LastSyncDate") ? (DateTime)department.Fields.AdditionalData["LastSyncDate"] : null;
-
-                    log.LogInformation($"group.DisplayName = {group.DisplayName}");
-                    log.LogInformation($"RGCode = {RGCode}");
-                    log.LogInformation($"abbreviation = {abbreviation}");
-                    log.LogInformation($"LastSyncDate = {LastSyncDate}");
-                    log.LogInformation($"itemId = {itemId}");
-
-                    if (LastSyncDate != null)
-                    {
-                        var userIds = GetUsersToOnboard(onboardUserClient, groupId, (DateTime)LastSyncDate, log);
-
-                        log.LogInformation($"userIds.Result.Count: {userIds.Result.Count}");
-
-                        if (userIds.Result.Count > 0)
-                        {
-                            string welcomeGroupId = GetWelcomeGroupId(welcomeUserClient, welcomeGroupIds, userIds.Result.Count, WelcomeGroupMemberLimit, log).Result;
-                            string response = await AssignUserstoGroups(welcomeUserClient, userIds.Result, assignedGroupId, welcomeGroupId, log);
-
-                            if (response == "")
-                            {
-                                await UpdateLastSyncDate(onboardUserClient, siteId, listId, itemId, log);
-                            }
-                            else
-                            {
-                                string details = $"{response.Replace(Environment.NewLine, "<br / >")}<br />Department: {abbreviation}<br />Group Id: {groupId}<br />User Ids: {JsonConvert.SerializeObject(userIds.Result)}";
-                                sendEmail(config["emailUserName"], config["emailUserSecret"], config["recipientAddress"], "Assign users failed", details, log);
-                            }
-                        }
-                    }
-                    else
-                    {
-                        log.LogInformation($"Null sync date - Department: {abbreviation} - Group Id: {groupId}");
-                        string details = $"Department: {abbreviation}<br />Group Id: {groupId}";
-                        sendEmail(config["emailUserName"], config["emailUserSecret"], config["recipientAddress"], "Null sync date", details, log);
-                    }
                 }
             }
             catch (ODataError odataError)
@@ -128,19 +157,6 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
             }
 
             log.LogInformation($"OnboardUsers processed a request.");
-        }
-
-        private static ListItem GetDepartment(string RGCode)
-        {
-            foreach (ListItem department in departmentList)
-            {
-                if (department.Fields.AdditionalData["RGCode"].ToString() == RGCode)
-                {
-                    return department;
-                }
-            }
-
-            return null;
         }
 
         private static async Task<List<ListItem>> GetSyncedDepartmentList(GraphServiceClient graphAPIAuth, string siteId, string listId, ILogger log)
