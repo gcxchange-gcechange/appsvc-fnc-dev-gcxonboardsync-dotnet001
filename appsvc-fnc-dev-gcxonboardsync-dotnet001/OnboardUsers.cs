@@ -10,6 +10,7 @@ using Microsoft.Graph.Models.ODataErrors;
 using Newtonsoft.Json;
 using Microsoft.Graph;
 using static appsvc_fnc_dev_gcxonboardsync_dotnet001.Auth;
+using System.Linq;
 
 namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
 {
@@ -97,8 +98,6 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
                                 {
                                     userIdList.Add(userId);
                                     userIdCount += 1;
-
-                                    log.LogInformation($"userIdCount = {userIdCount}");
 
                                     if (userIdCount == AssignUserLimit)
                                     {
@@ -331,7 +330,16 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
             {
                 log.LogError($"odataError.Error.Code: {odataError.Error.Code}");
                 log.LogError($"odataError.Error.Message: {odataError.Error.Message}");
-                errorMessage = $"{odataError.Error.Message} - assigned group id: {assignedGroupId}";
+
+                if (odataError.Error.Code == "Request_BadRequest")
+                {
+                    log.LogWarning($"Retry assignment to assigned group after removing existing members");
+                    errorMessage = await HandleDuplicates(graphAPIAuth, userIds.ToList(), assignedGroupId, log);
+                }
+                else
+                {
+                    errorMessage = $"{odataError.Error.Message} - assigned group id: {assignedGroupId}";
+                }
             }
             catch (Exception e)
             {
@@ -350,7 +358,16 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
             {
                 log.LogError($"odataError.Error.Code: {odataError.Error.Code}");
                 log.LogError($"odataError.Error.Message: {odataError.Error.Message}");
-                errorMessage = errorMessage + Environment.NewLine + $"{odataError.Error.Message} - welcome group id: {welcomeGroupId}";
+
+                if (odataError.Error.Code == "Request_BadRequest")
+                {
+                    log.LogWarning($"Retry assignment to welcome group after removing existing members");
+                    errorMessage = await HandleDuplicates(graphAPIAuth, userIds.ToList(), welcomeGroupId, log);
+                }
+                else
+                {
+                    errorMessage = errorMessage + Environment.NewLine + $"{odataError.Error.Message} - welcome group id: {welcomeGroupId}";
+                }
             }
             catch (Exception e)
             {
@@ -361,6 +378,62 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
             }
 
             log.LogInformation("AssignUserstoGroups processed a request.");
+
+            return errorMessage;
+        }
+
+        private static async Task<string> HandleDuplicates(GraphServiceClient graphAPIAuth, List<string> userIds, string groupId, ILogger log)
+        {
+            string errorMessage = "";
+            string idsToFilter = string.Format("'{0}'", string.Join("','", userIds));
+
+            var members = await graphAPIAuth.Groups[groupId].Members.GraphUser.GetAsync((requestConfiguration) =>
+            {
+                requestConfiguration.QueryParameters.Count = true;
+                requestConfiguration.QueryParameters.Select = new string[] { "id" };
+                requestConfiguration.QueryParameters.Filter = $"id in ({idsToFilter})";
+                requestConfiguration.Headers.Add("ConsistencyLevel", "eventual");
+            });
+
+            foreach (User member in members.Value)
+            {
+                if (userIds.Contains(member.Id))
+                {
+                    userIds.Remove(member.Id);
+                }
+            }
+
+            if (userIds.Count > 0)
+            {
+                log.LogInformation($"Retrying assignment of {userIds.Count} user(s) to groupId: {groupId}");
+                List<string> userList = new();
+                foreach (string userId in userIds)
+                {
+                    userList.Add($"https://graph.microsoft.com/v1.0/directoryObjects/{userId}");
+                }
+
+                try
+                {
+                    await graphAPIAuth.Groups[groupId].PatchAsync(new Group { AdditionalData = new Dictionary<string, object> { { "members@odata.bind", userList } } });
+                }
+                catch (ODataError odataError)
+                {
+                    log.LogError($"odataError.Error.Code: {odataError.Error.Code}");
+                    log.LogError($"odataError.Error.Message: {odataError.Error.Message}");
+                    errorMessage = $"{odataError.Error.Message} - retry for group id: {groupId}";
+                }
+                catch (Exception e)
+                {
+                    log.LogError($"Message: {e.Message}");
+                    if (e.InnerException is not null) log.LogError($"InnerException: {e.InnerException.Message}");
+                    log.LogError($"StackTrace: {e.StackTrace}");
+                    errorMessage = $"{e.Message} - retry for group id: {groupId}";
+                }
+            }
+            else
+            {
+                log.LogInformation($"No retry because all users already assigned to groupId: {groupId}");
+            }
 
             return errorMessage;
         }
