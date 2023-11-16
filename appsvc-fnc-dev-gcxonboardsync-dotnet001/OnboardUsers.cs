@@ -216,6 +216,7 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
                 {
                     requestConfiguration.QueryParameters.Count = true;
                     requestConfiguration.QueryParameters.Select = new string[] { "id", "displayName", "createdDateTime" };
+                    requestConfiguration.QueryParameters.Top = 999;
 
                     // Error: Request_UnsupportedQuery Operator: 'Less' is not supported
                     // cannot use less than operator (lt) so need to do another check in the foreach loop
@@ -230,6 +231,24 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
                     if (member.CreatedDateTime > LastSyncDate)
                     {
                         userIds.Add(member.Id);
+                    }
+                }
+
+                while (members.OdataNextLink != null)
+                {
+                    var nextPageRequestInformation = new RequestInformation
+                    {
+                        HttpMethod = Method.GET,
+                        UrlTemplate = members.OdataNextLink
+                    };
+                    members = await graphAPIAuth.RequestAdapter.SendAsync(nextPageRequestInformation, (parseNode) => new UserCollectionResponse());
+
+                    foreach (User member in members.Value)
+                    {
+                        if (member.CreatedDateTime > LastSyncDate)
+                        {
+                            userIds.Add(member.Id);
+                        }
                     }
                 }
             }
