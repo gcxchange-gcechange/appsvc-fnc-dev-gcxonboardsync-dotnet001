@@ -281,45 +281,6 @@ namespace appsvc_fnc_dev_gcxonboardsync_dotnet001
             return userIds;
         }
 
-        //private static async Task<string> GetWelcomeGroupId(GraphServiceClient graphAPIAuth, string welcomeGroupIds, int UserCount, int WelcomeGroupMemberLimit, ILogger log)
-        //{
-        //    log.LogInformation("GetWelcomeGroupId received a request.");
-
-        //    string welcomeGroupId = null;
-
-        //    try
-        //    {
-        //        foreach (string groupId in welcomeGroupIds.Split(new[] { "," }, StringSplitOptions.RemoveEmptyEntries))
-        //        {
-        //            var MemberCount = await graphAPIAuth.Groups[groupId].Members.Count.GetAsync((requestConfiguration) =>
-        //            {
-        //                requestConfiguration.Headers.Add("ConsistencyLevel", "eventual");
-        //            });
-
-        //            if ((MemberCount + UserCount) <= WelcomeGroupMemberLimit)
-        //            {
-        //                welcomeGroupId = groupId;
-        //                break;
-        //            }
-        //        }
-        //    }
-        //    catch (ODataError odataError)
-        //    {
-        //        log.LogError(odataError.Error.Code);
-        //        log.LogError(odataError.Error.Message);
-        //    }
-        //    catch (Exception e)
-        //    {
-        //        log.LogError($"Message: {e.Message}");
-        //        if (e.InnerException is not null) log.LogError($"InnerException: {e.InnerException.Message}");
-        //        log.LogError($"StackTrace: {e.StackTrace}");
-        //    }
-
-        //    log.LogInformation("GetWelcomeGroupId processed a request.");
-
-        //    return welcomeGroupId;
-        //}
-
         private static string GetWelcomeGroupId(int UserCount, int WelcomeGroupMemberLimit, ILogger log)
         {
             log.LogInformation("GetWelcomeGroupId received a request.");
