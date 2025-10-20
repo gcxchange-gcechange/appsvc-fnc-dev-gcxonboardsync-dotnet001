@@ -1,3 +1,5 @@
+name: Security-Scan-NET
+
 trigger: none
 
 pr:
