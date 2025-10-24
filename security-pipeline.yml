@@ -1,0 +1,131 @@
+name: Security-Scan-NET
+
+trigger: none
+
+pr:
+  branches:
+    include:
+      - main
+      - master
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  DOTNET_VERSION: '8.x'
+
+stages:
+- stage: SecurityScans
+  displayName: Security Scans
+  jobs:
+  - job: RunScans
+    displayName: Run Semgrep, Gitleaks, Dependency-Check
+    steps:
+
+    - task: UseDotNet@2
+      displayName: 'Install .NET SDK'
+      inputs:
+        packageType: sdk
+        version: $(DOTNET_VERSION)
+
+    - checkout: self
+
+    - script: |
+        dotnet restore
+      displayName: 'Restore NuGet Packages'
+
+    # Semgrep
+    - script: |
+        pip install semgrep
+      displayName: 'Install Semgrep'
+
+    - script: |
+        semgrep scan --config auto --error
+        if [ $? -ne 0 ]; then
+          echo "##vso[task.setvariable variable=SemgrepFailed]true"
+        fi
+      displayName: 'Run Semgrep Scan'
+      continueOnError: true
+
+    # Gitleaks
+    - script: |
+        curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.18.2/gitleaks_8.18.2_linux_x64.tar.gz -o gitleaks.tar.gz
+        tar -xzf gitleaks.tar.gz
+        chmod +x gitleaks
+        sudo mv gitleaks /usr/local/bin/gitleaks
+      displayName: 'Install Gitleaks'
+
+    - script: |
+        mkdir -p $(Build.ArtifactStagingDirectory)/gitleaks
+        gitleaks detect \
+          --source $(Build.SourcesDirectory) \
+          --report-path $(Build.ArtifactStagingDirectory)/gitleaks/gitleaks-report.json \
+          --no-banner
+        if [ $? -ne 0 ]; then
+          echo "##vso[task.setvariable variable=GitleaksFailed]true"
+        fi
+      displayName: 'Run Gitleaks'
+      continueOnError: true
+
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Gitleaks Report'
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)/gitleaks'
+        ArtifactName: 'GitleaksReport'
+
+    # OWASP Dependency-Check
+    - script: |
+        docker run --rm \
+          --env NVD_API_KEY=$(NVD_API_KEY) \
+          alpine sh -c 'echo "NVD_API_KEY inside container is: ${NVD_API_KEY:+set}"'
+      displayName: 'Verify NVD_API_KEY'
+
+    - script: |
+        mkdir -p $(Build.ArtifactStagingDirectory)/dependency
+        docker run --rm \
+          -e NVD_API_KEY=$(NVD_API_KEY) \
+          -v $(Build.SourcesDirectory):/src \
+          -v $(Build.ArtifactStagingDirectory)/dependency:/report \
+          owasp/dependency-check:latest \
+          --project "AzureFunctionApp" \
+          --scan /src \
+          --nvdApiKey "$(NVD_API_KEY)" \
+          --format HTML \
+          --enableRetired \
+          --out /report \
+          --log /report/debug.log
+        if [ $? -ne 0 ]; then
+          echo "##vso[task.setvariable variable=DependencyFailed]true"
+        fi
+      displayName: 'Run OWASP Dependency-Check'
+      continueOnError: true
+
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Dependency-Check Report'
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)/dependency'
+        ArtifactName: 'DependencyReport'
+
+    # Final Check
+    - script: |
+        failed=false
+        if [ "$SemgrepFailed" = "true" ]; then
+          echo "Semgrep found issues"
+          failed=true
+        fi
+        if [ "$GitleaksFailed" = "true" ]; then
+          echo "Gitleaks found issues"
+          failed=true
+        fi
+        if [ "$DependencyFailed" = "true" ]; then
+          echo "Dependency-Check found issues"
+          failed=true
+        fi
+
+        if [ "$failed" = true ]; then
+          echo "##vso[task.logissue type=error]One or more security scans failed."
+          exit 1
+        else
+          echo "All security scans passed"
+        fi
+      displayName: 'Final Check'
